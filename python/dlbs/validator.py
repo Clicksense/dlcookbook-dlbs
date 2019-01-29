@@ -57,8 +57,8 @@ class Validator(object):
         self.plan = copy.deepcopy(plan)     # We will compute variables here - so it's a machine dependent validation.
         self.plan_ok = True                 # Global summary: is plan OK.
         self.log_files_collisions = set()   # Files that are produced by 2 or more experiments (collisions)
-        self.num_disabled = 0               # Number of disabled experiments
-        self.frameworks = {}                # Frameworks stats excluding disabled experiments
+        self.num_inactive = 0               # Number of inactive experiments
+        self.frameworks = {}                # Frameworks stats excluding inactive experiments
         self.need_docker = False            # Does the plan need docker (CPU experiments)?
         self.need_nvidia_docker = False     # Does the plan need nvidia docker (GPU experiments)?
         self.need_nvidia_docker2 = False    # Does the plan need nvidia docker 2 (GPU experiments)?
@@ -140,15 +140,15 @@ class Validator(object):
         print("========================= PLAN SUMMARY =========================")
         print("Is plan OK ................................ %s" % (str(self.plan_ok)))
         print("Total number of experiments (plan size).....%d" % (len(self.plan)))
-        print("Number of disabled experiments ............ %d" % self.num_disabled)
-        print("Number of active experiments .............. %d" % (len(self.plan) - self.num_disabled))
+        print("Number of inactive experiments ............ %d" % self.num_inactive)
+        print("Number of active experiments .............. %d" % (len(self.plan) - self.num_inactive))
         print("Log files collisions ...................... %s" % ('YES' if self.log_files_collisions else 'NO'))
         print("================================================================")
 
     def update_framework_stats(self, exp):
         """Updates statistics for a framework in this experiment `exp`.
 
-        Will not update stats if this experiment is disabled.
+        Will not update stats if this experiment is inactive.
 
         Args:
             exp (dict): An experiment item from :py:meth:`~dlbs.validator.Validator.plan` list.
@@ -162,16 +162,16 @@ class Validator(object):
                 'num_exps': 0,
                 'num_docker_exps': 0,
                 'num_host_exps': 0,
-                'num_disabled': 0,
+                'num_inactive': 0,
                 'num_gpu_exps': 0,
                 'num_cpu_exps': 0,
                 'docker_images': []
             }
         stats = self.frameworks[framework_id]
-        # Update number of disabled exps
-        if 'exp.status' in exp and exp['exp.status'] == 'disabled':
-            stats['num_disabled'] += 1
-            self.num_disabled += 1
+        # Update number of inactive exps
+        if 'exp.status' in exp and exp['exp.status'] in ('disabled', 'inactive'):
+            stats['num_inactive'] += 1
+            self.num_inactive += 1
             return
         stats['num_exps'] += 1
         # Update docker/host stats
