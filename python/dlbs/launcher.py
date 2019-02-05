@@ -316,6 +316,7 @@ class Launcher(object):
             if progress_tracker.num_completed_benchmarks() % 10 == 0:
                 print("Done %d benchmarks out of %d" % (progress_tracker.num_completed_benchmarks(),
                                                         num_active_experiments))
+                sys.stdout.flush()
         # All benchmarks have been conducted.
         if resource_monitor is not None:
             resource_monitor.stop()

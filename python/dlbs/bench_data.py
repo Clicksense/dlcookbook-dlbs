@@ -26,10 +26,49 @@ from __future__ import print_function
 
 import copy
 import json
-from six import string_types
+import argparse
+import itertools
+from six import string_types, integer_types
 
 from dlbs.utils import IOUtils, OpenFile, DictUtils
 from dlbs.processor import Processor
+
+
+class DLPGUtils(object):
+
+    EXPECTED_VALUES = {
+        "exp.framework_title": ["TensorFlow", "Caffe", "Caffe2", "MXNET", "PyTorch", "TensorRT"],
+        "exp.backend": ["caffe", "caffe2", "mxnet", "nvcnn", "nvtfcnn", "pytorch", "tensorflow", "tensorrt"],
+        "exp.node_id": ["apollo_6500_xl_gen9", "apollo_6500_xl_gen10"],
+        "exp.node_title": ["Apollo 6500 XL Gen9", "Apollo 6500 XL Gen10"],
+        "exp.device_type": ["cpu", "gpu"],
+        "exp.device_title": ["Tesla P100-PCIE-16GB", "Tesla P100-SXM2-16GB",
+                             "Tesla P4", "Tesla T4",
+                             "Tesla V100-PCIE-16GB", "Tesla V100-SXM2-16GB", "Tesla V100-SXM2-32GB"],
+        "exp.num_node_gpus": [1, 2, 4, 8],
+        "exp.dtype": ["float32", "float16", "int8"],
+        "exp.data": ["synthetic", "real", "real/ssd", "real/dram", "real/weka", "real/nvme"],
+        "exp.phase": ["training", "inference"],
+        "exp.model_title": ["AcousticModel", "AlexNet", "AlexNetOWT", "DeepMNIST", "DeepSpeech2", "GoogleNet",
+                            "InceptionV3", "InceptionV4", "Overfeat", "ResNet18", "ResNet34", "ResNet50",
+                            "ResNet101", "ResNet152", "ResNet200", "ResNet269", "SensorNet", "Seq2SeqAutoencoder",
+                            "TextCNN", "VGG11", "VGG13", "VGG16", "VGG19"]
+    }
+
+    @staticmethod
+    def check_values(param, param_values, expected_values):
+        unexpected_values = [val for val in param_values if val not in expected_values]
+        if unexpected_values:
+            print("Parameter '{}' has unexpected values {}. "
+                  "Expecting one of {}.".format(param, unexpected_values, expected_values))
+        else:
+            print("Parameter '{}' check OK.".format(param))
+
+    @staticmethod
+    def check(bench_data):
+        summary = bench_data.summary(params=list(DLPGUtils.EXPECTED_VALUES))
+        for param in DLPGUtils.EXPECTED_VALUES:
+            DLPGUtils.check_values(param, summary[param], DLPGUtils.EXPECTED_VALUES[param])
 
 
 def print_vals(obj):
@@ -77,16 +116,23 @@ class BenchData(object):
         return selector
 
     @staticmethod
-    def status(log_file):
+    def status(arg):
         """ Return status of the benchmark stored in a log file `log_file`.
 
         Args:
-            log_file (str): A name of a log file.
+            arg: A name of a log file, a dictionary or an instance of the BenchData class.
 
         Returns:
             str or None: "ok" for successful benchmark, "failure" for not and None for other cases (such as no file).
         """
-        bench_data = BenchData.parse(log_file)
+        if isinstance(arg, string_types):
+            bench_data = BenchData.parse(arg)
+        elif isinstance(arg, dict):
+            bench_data = BenchData([arg], create_copy=False)
+        elif isinstance(arg, BenchData):
+            bench_data = arg
+        else:
+            raise TypeError("Invalid argument type (={}). Expecting string, BenchData".format(type(arg)))
         if len(bench_data) == 1:
             return 'ok' if DictUtils.get(bench_data[0], 'results.time', -1) > 0 else 'failure'
         return None
@@ -108,7 +154,7 @@ class BenchData(object):
         benchmarks = IOUtils.read_json(file_name, check_extension=True)
         if 'data' not in benchmarks:
             raise ValueError("No benchmark data found in '{}'".format(file_name))
-        return BenchData(benchmarks['data'])
+        return BenchData(benchmarks['data'], create_copy=False)
 
     @staticmethod
     def parse(inputs, recursive=False):
@@ -135,10 +181,13 @@ class BenchData(object):
                     must_match=False
                 )
             benchmarks.append(parameters)
-        return BenchData(benchmarks)
+        return BenchData(benchmarks, create_copy=False)
 
-    def __init__(self, benchmarks=None):
-        self.__benchmarks = copy.deepcopy(benchmarks) if benchmarks is not None else []
+    def __init__(self, benchmarks=None, create_copy=False):
+        if benchmarks is None:
+            self.__benchmarks = []
+        else:
+            self.__benchmarks = copy.deepcopy(benchmarks) if create_copy else benchmarks
 
     def __len__(self):
         """Return number of benchmarks.
@@ -198,7 +247,7 @@ class BenchData(object):
         """
         match = BenchData.get_selector(query)
         selected = [bench for bench in self.__benchmarks if match(bench)]
-        return BenchData(selected)
+        return BenchData(selected, create_copy=False)
 
     def delete(self, query):
         """ Delete only those benchmarks that match `query`
@@ -236,7 +285,7 @@ class BenchData(object):
 
         if use_processor:
             Processor().compute_variables(benchmarks)
-        return BenchData(benchmarks)
+        return BenchData(benchmarks, create_copy=False)
 
     def select_keys(self, keys):
         """Return copy of benchmarks that only contain `keys`
@@ -250,7 +299,7 @@ class BenchData(object):
         if keys is None:
             return self.copy()
         selected = [copy.deepcopy(DictUtils.subdict(bench, keys)) for bench in self.__benchmarks]
-        return BenchData(selected)
+        return BenchData(selected, create_copy=False)
 
     def select_values(self, key):
         """Return unique values for the `key` across all benchmarks.
@@ -300,151 +349,230 @@ class BenchData(object):
             summary_dict[param] = list(summary_dict[param])
         return summary_dict
 
-    def report(self, report_type='exploration'):
-        """Print exploration, weak/strong scaling reports.
-
-        Args:
-            report_type (str): Type of a report to build. One of 'exploration', 'weak-scaling' or 'strong-scaling'.
-        """
-        if report_type not in ['exploration', 'weak-scaling', 'strong-scaling']:
-            raise ValueError("Invalid report type")
-        benchmarks = self.select(self.Reporter.PARAMETERS)
-        if len(benchmarks) == 0:
-            raise("WARNING - reporter needs the following parameters "
-                  "to be present in each benchmarks: {}".format(self.Reporter.PARAMETERS))
-        reporter = BenchData.Reporter(benchmarks.benchmarks())
-        if report_type == 'exploration':
-            reporter.exploration_report()
-        else:
-            reporter.scaling_report(BenchData.Reporter.WEAK_SCALING if report_type == 'weak-scaling' else BenchData.Reporter.STRONG_SCALING)
+    def report(self, inputs=None, output=None, output_cols=None, report_speedup=False, report_efficiency=False):
+        reporter = BenchData.Reporter(self)
+        reporter.report(inputs, output, output_cols, report_speedup, report_efficiency)
 
     class Reporter(object):
-
-        PARAMETERS = ['results.time', 'exp.model_title', 'exp.gpus', 'exp.effective_batch']
-        BATCH_TM_TITLE = "Batch time (milliseconds)"
-        IPS_TITLE = "Inferences Per Second (IPS, throughput)"
-        SPEEDUP_TITLE = "Speedup (instances per second)"
-        WEAK_SCALING = 1
-        STRONG_SCALING = 2
-
-        def __init__(self, benchmarks):
-            self.cache = {}
-            self.nets = set()
-            self.batches = set()
-            self.devices = set()
-            for benchmark in benchmarks:
-                key = '{0}_{1}_{2}'.format(
-                    benchmark['exp.model_title'],
-                    benchmark['exp.gpus'],
-                    benchmark['exp.effective_batch']
-                )
-                if key in self.cache:
-                    raise ValueError("Duplicate benchmark found with key={}".format(key))
-                self.cache[key] = float(benchmark['results.time'])
-                self.nets.add(benchmark['exp.model_title'])
-                self.batches.add(int(benchmark['exp.effective_batch']))
-                self.devices.add(str(benchmark['exp.gpus']))
-            self.nets = sorted(list(self.nets))
-            self.batches = sorted(list(self.batches))
-            self.devices = sorted(list(self.devices), key=len)
-
-        def exploration_report(self):
-            """ Builds exploration report for inference and single device training.
-            """
-            header = "%-20s %-10s" % ('Network', 'Device')
-            for batch in self.batches:
-                header = "%s %-10s" % (header, batch)
-            report = []
-            num_batches = len(self.batches)
-            for net in self.nets:
-                for device in self.devices:
-                    profile = {'net': net, 'device': device, 'time': [-1]*num_batches, 'throughput': [-1]*num_batches}
-                    profile_ok = False
-                    for idx, batch in enumerate(self.batches):
-                        key = '{0}_{1}_{2}'.format(net, device, batch)
-                        if key in self.cache and self.cache[key] > 0:
-                            profile_ok = True
-                            profile['time'][idx] = self.cache[key]
-                            profile['throughput'][idx] = int(batch * (1000.0 / self.cache[key]))
-                    if profile_ok:
-                        report.append(profile)
-            BenchData.Reporter.print_report_txt(BenchData.Reporter.BATCH_TM_TITLE, header, report, 'net', 'device', 'time')
-            BenchData.Reporter.print_report_txt(BenchData.Reporter.IPS_TITLE, header, report, 'net', 'device', 'throughput')
-
-        def scaling_report(self, report_type):
-            """ Builds weak/strong scaling report for multi-GPU training.
-            """
-            header = "%-20s %-10s" % ('Network', 'Batch')
-            for device in self.devices:
-                header = "%s %-10d" % (header, (1 + device.count(',')))
-            report = []
-            for net in self.nets:
-                for batch in self.batches:
-                    profile = {'net': net, 'batch': batch, 'time': [], 'throughput': [], 'efficiency': [], 'speedup': []}
-                    profile_ok = False
-                    for device in self.devices:
-                        num_devices = 1 + device.count(',')
-                        effective_batch = batch
-                        if report_type == BenchData.Reporter.WEAK_SCALING:
-                            effective_batch = effective_batch * num_devices
-                        key = '{0}_{1}_{2}'.format(net, device, effective_batch)
-                        if num_devices == 1 and key not in self.cache:
-                            # If we do not have data for one device, does not make sense to continue
-                            break
-                        batch_tm = throughput = efficiency = speedup = -1.0
-                        if key in self.cache:
-                            batch_tm = self.cache[key]
-                            throughput = int(effective_batch * (1000.0 / batch_tm))
-                            if len(profile['throughput']) == 0:
-                                speedup = 1
-                            else:
-                                speedup = 1.0 * throughput / profile['throughput'][0]
-                        if len(profile['efficiency']) == 0:
-                            efficiency = 100.00
-                            profile_ok = True
-                        elif profile['time'][0] > 0:
-                            if report_type == BenchData.Reporter.WEAK_SCALING:
-                                efficiency = int(10000.0 * profile['time'][0] / batch_tm) / 100.0
-                            else:
-                                efficiency = int(10000.0 * profile['time'][0] / (num_devices * batch_tm)) / 100.0
-                            profile_ok = True
-                        profile['time'].append(batch_tm)
-                        profile['throughput'].append(int(throughput))
-                        profile['efficiency'].append(efficiency)
-                        profile['speedup'].append(speedup)
-                    if profile_ok:
-                        report.append(profile)
-            BenchData.Reporter.print_report_txt(BenchData.Reporter.BATCH_TM_TITLE, header, report, 'net', 'batch', 'time')
-            BenchData.Reporter.print_report_txt(BenchData.Reporter.IPS_TITLE, header, report, 'net', 'batch', 'throughput')
-            BenchData.Reporter.print_report_txt(BenchData.Reporter.SPEEDUP_TITLE, header, report, 'net', 'batch', 'speedup')
-            BenchData.Reporter.print_report_txt(
-                "Efficiency  = 100% * t1 / tN",
-                header, report, 'net', 'batch', 'efficiency'
-            )
+        TITLES = {
+            "exp.model_title": "Model", "exp.replica_batch": "Replica Batch", "exp.effective_batch": "Effective Batch",
+            "exp.num_gpus": "Num GPUs", "exp.gpus": "GPUs", "exp.dtype": "Precision",
+            "exp.docker_image": "Docker Image"
+        }
 
         @staticmethod
-        def print_report_txt(description, header, report, col1_key, col2_key, data_key):
-            """ Writes a human readable report to a standard output.
-            """
-            print(description)
-            print(header)
-            for record in report:
-                row = "%-20s %-10s" % (record[col1_key], record[col2_key])
-                for idx in range(len(record['time'])):
-                    val = record[data_key][idx]
-                    if val >= 0:
-                        if isinstance(val, int):
-                            row = "%s %-10d" % (row, record[data_key][idx])
+        def to_string(val):
+            if val is None:
+                return "-"
+            elif isinstance(val, string_types):
+                return val
+            elif isinstance(val, integer_types):
+                return "{:d}".format(val)
+            elif isinstance(val, float):
+                return "{:.2f}".format(val)
+            else:
+                raise TypeError("Invalid value type (='{}'). Expecting strings, integers or floats.".format(type(val)))
+
+        def build_cache(self, inputs=None, output=None, output_cols=None):
+            self.input_cols = [None] * len(inputs)
+            for idx, param in enumerate(inputs):
+                self.input_cols[idx] = {"index": idx, "param": param, "width": 0,
+                                        "title": DictUtils.get(BenchData.Reporter.TITLES, param, param),
+                                        "vals": sorted(self.bench_data.select_values(param))}
+            self.output_param = output
+            output_cols = output_cols if output_cols else sorted(self.bench_data.select_values(output))
+            self.output_cols = [None] * len(output_cols)
+            for idx, param_value in enumerate(output_cols):
+                self.output_cols[idx] = {"index": idx, "value": param_value, "title": param_value,
+                                         "width": len(BenchData.Reporter.to_string(param_value))}
+            self.cache = {}
+            for bench in self.bench_data.benchmarks():
+                if BenchData.status(bench) != "ok":
+                    continue
+                bench_key = []
+                for input_col in self.input_cols:
+                    param_value = DictUtils.get(bench, input_col['param'], None)
+                    if not param_value:
+                        bench_key = []
+                        break
+                    bench_key.append(str(param_value))
+                if bench_key:
+                    output_val = DictUtils.get(bench, self.output_param, None)
+                    if output_val:
+                        bench_key = '.'.join(bench_key + [str(output_val)])
+                        if bench_key not in self.cache:
+                            self.cache[bench_key] = bench
                         else:
-                            row = "%s %-10.2f" % (row, record[data_key][idx])
+                            raise ValueError("Duplicate benchmark with key = {}".format(bench_key))
+
+        def compute_column_widths(self, times, throughputs):
+            # Input columns
+            for input_col in self.input_cols:
+                input_col['width'] = len(input_col['title'])
+                for val in input_col['vals']:
+                    input_col['width'] = max(input_col['width'], len(BenchData.Reporter.to_string(val)))
+            # Output columns
+            num_rows = len(times)
+            num_output_cols = len(self.output_cols)
+            for row_idx in range(num_rows):
+                for col_idx in range(num_output_cols):
+                    self.output_cols[col_idx]['width'] = max([
+                        self.output_cols[col_idx]['width'],
+                        len(BenchData.Reporter.to_string(times[row_idx][col_idx])),
+                        len(BenchData.Reporter.to_string(throughputs[row_idx][col_idx]))
+                    ])
+
+        def compute_speedups(self, throughputs):
+            speedups = copy.deepcopy(throughputs)
+            num_cols = len(self.output_cols)
+            for row in speedups:
+                for idx in range(1, num_cols):
+                    row[idx] = None if row[0] is None or row[idx] is None else float(row[idx]) / row[0]
+                row[0] = 1.00 if row[0] is not None else None
+            return speedups
+
+        def compute_efficiency(self, times):
+            replica_batch_idx = -1
+            effective_batch_idx = -1
+            for col_idx, input_col in enumerate(self.input_cols):
+                if input_col['param'] == "exp.replica_batch":
+                    replica_batch_idx = col_idx
+                elif input_col['param'] == "exp.effective_batch":
+                    effective_batch_idx = col_idx
+
+            if (replica_batch_idx == -1 and effective_batch_idx == -1) or \
+               (replica_batch_idx >= 0 and effective_batch_idx >= 0) or \
+               self.output_param != "exp.num_gpus":
+                raise ValueError("Efficiency can only be computed when one of the inputs is either replica or "
+                                 "effective batch and when output is the number of GPUs e.g: "
+                                 "inputs=['exp.model_title', 'exp.replica_batch'], output='exp.num_gpus'")
+            efficiency = copy.deepcopy(times)
+            num_cols = len(self.output_cols)
+            for row in efficiency:
+                for idx in range(1, num_cols):
+                    if row[0] is None or row[idx] is None:
+                        row[idx] = None
                     else:
-                        row = "%s %-10s" % (row, '-')
+                        if replica_batch_idx >= 0:
+                            # Weak scaling
+                            row[idx] = int(10000.0 * row[0] / row[idx]) / 100.0
+                        else:
+                            # String scaling
+                            row[idx] = int(10000.0 * row[0] / (self.output_cols[idx]['value'] * row[idx])) / 100.0
+                        row[idx] = min(row[idx], 100.0)
+                row[0] = 100.00 if row[0] is not None else None
+            return efficiency
+
+        def get_header(self):
+            header = ""
+            for input_col in self.input_cols:
+                format_str = "  %-" + str(input_col['width']) + "s"
+                header = header + format_str % BenchData.Reporter.to_string(input_col['title'])
+            header += "    "
+            for output_col in self.output_cols:
+                format_str = "%+" + str(output_col['width']) + "s  "
+                header = header + format_str % BenchData.Reporter.to_string(output_col['title'])
+            return header
+
+        def print_table(self, title, header, inputs, outputs):
+            print(title)
+            print(header)
+            for input, output in zip(inputs, outputs):
+                row = ""
+                for input_col in self.input_cols:
+                    format_str = "  %-" + str(input_col['width']) + "s"
+                    row = row + format_str % BenchData.Reporter.to_string(input[input_col['index']])
+                row += "    "
+                for output_col in self.output_cols:
+                    format_str = "%+" + str(output_col['width']) + "s  "
+                    row = row + format_str % BenchData.Reporter.to_string(output[output_col['index']])
                 print(row)
             print("\n\n")
 
+        def __init__(self, bench_data):
+            self.bench_data = bench_data
+            self.input_cols = None
+            self.output_param = None
+            self.output_cols = None
+            self.cache = None
+
+        def report(self, inputs=None, output=None, output_cols=None, report_speedup=False, report_efficiency=False):
+            # Build cache that will map benchmarks keys to benchmark objects.
+            self.build_cache(inputs, output, output_cols)
+            # Iterate over column values and build table with batch times and throughput
+            cols = []
+            times = []
+            throughputs = []
+            benchmark_keys = [input_col['vals'] for input_col in self.input_cols]
+            # Build tables for batch times and benchmarks throughputs
+            # The `benchmark_key` is a tuple of column values e.g. ('ResNet50', 256)
+            for benchmark_key in itertools.product(*benchmark_keys):
+                cols.append(copy.deepcopy(benchmark_key))
+                times.append([None] * len(self.output_cols))
+                throughputs.append([None] * len(self.output_cols))
+                for output_col in self.output_cols:
+                    benchmark_key = [str(key) for key in benchmark_key]
+                    key = '.'.join(benchmark_key + [str(output_col['value'])])
+                    if key in self.cache:
+                        times[-1][output_col['index']] = self.cache[key]['results.time']
+                        throughputs[-1][output_col['index']] = self.cache[key]['results.throughput']
+            # Determine minimal widths for columns
+            self.compute_column_widths(times, throughputs)
+            #
+            header = self.get_header()
+            self.print_table("Batch time (milliseconds)", header, cols, times)
+            self.print_table("Throughput (instances per second e.g. images/sec)", header, cols, throughputs)
+            if report_speedup:
+                speedups = self.compute_speedups(throughputs)
+                self.print_table("Speedup (based on instances per second table, "
+                                 "relative to first output column ({} = {}))".format(self.output_param,
+                                                                                     self.output_cols[0]['value']),
+                                 header, cols, speedups)
+            if report_efficiency:
+                efficiency = self.compute_efficiency(times)
+                self.print_table("Efficiency (based on batch times table, "
+                                 "relative to first output column ({} = {}))".format(self.output_param,
+                                                                                     self.output_cols[0]['value']),
+                                 header, cols, efficiency)
+
+
+def parse_arguments():
+    """Parse command line arguments
+
+    Returns:
+        dict: Dictionary with command line arguments.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', type=str, default='parse', choices=['parse', 'summary', 'report'],
+                        help="Action to perform. ")
+    parser.add_argument('inputs', type=str, nargs='*',
+                        help="Input file(s) and/or folders. ")
+    parser.add_argument('--no-recursive', '--no_recursive', required=False, default=False,
+                        action='store_true', help='When parsing log files, do not parse folders recursively.')
+    parser.add_argument('--select', type=str, required=False, default=None,
+                        help="A select query to filter benchmarks.")
+    parser.add_argument('--update', type=str, required=False, default=None,
+                        help="An expression to update query benchmarks.")
+    parser.add_argument('--output', type=str, required=False, default=None,
+                        help="File to write output to. If not specified, standard output is used. When log parsing "
+                             "is performed, several output formats are supported: '*.json' and '*.json.gz'.")
+    return vars(parser.parse_args())
+
+
+def parse(**kwargs):
+    data = BenchData.parse(kwargs['inputs'], recursive=not kwargs['no-recursive'])
+    if kwargs['select'] is not None:
+        data = data.select(kwargs['select'])
+    if kwargs['update'] is not None:
+        data = data.update(kwargs['select'], use_processor=False)
+    data.save(kwargs['output'])
+
 
 def main():
-    pass
+    args = parse_arguments()
+    print(args)
+    if args['action'] == 'parse':
+        parse(**args)
 
 
 if __name__ == "__main__":
