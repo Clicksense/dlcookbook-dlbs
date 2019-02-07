@@ -26,9 +26,7 @@ from __future__ import print_function
 import itertools
 import copy
 import uuid
-from six import string_types
-from dlbs.utils import DictUtils
-from dlbs.utils import ParamUtils
+from dlbs.utils import Six, DictUtils, ParamUtils
 
 
 class Builder(object):
@@ -210,10 +208,10 @@ class Builder(object):
         new_params = copy.deepcopy(params)
         for key, value in new_params.items():
             # assert not isinstance(value, list), "Lists are not supported in extension section"
-            if isinstance(value, string_types):
+            if isinstance(value, Six.string_types):
                 new_params[key] = value.replace('${__condition.', session_prefix)
             elif isinstance(value, list):
                 for idx, item in enumerate(value):
-                    if isinstance(item, string_types):
+                    if isinstance(item, Six.string_types):
                         value[idx] = item.replace('${__condition.', session_prefix)
         return new_params

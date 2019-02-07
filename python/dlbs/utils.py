@@ -32,11 +32,37 @@ import re
 import subprocess
 import importlib
 import logging
-from six import string_types, iteritems
 from multiprocessing import Process
 from multiprocessing import Queue
 from glob import glob
 from dlbs.exceptions import ConfigurationError
+
+
+# 99% of the DLBS source code is written in Python2/Python3 compatible mode using only standard modules. Some parts
+# however like checking variables type (strings for instance) are Python2/Python3 dependent. Obvious choice is to
+# use the `six` library. To run DLBS in a variety of benchmarking environments that may only have standard Python libs,
+# this thin `six`-type implementation is used.
+class Six(object):
+    """A part of functionality found in six library
+    https://github.com/benjaminp/six/blob/master/six.py
+    """
+    PY2 = sys.version_info[0] == 2
+    PY3 = sys.version_info[0] == 3
+
+    if PY3:
+        string_types = str,
+        integer_types = int,
+
+        @staticmethod
+        def iteritems(d, **kw):
+            return iter(d.items(**kw))
+    else:
+        string_types = basestring,
+        integer_types = (int, long)
+
+        @staticmethod
+        def iteritems(d, **kw):
+            return d.iteritems(**kw)
 
 
 class ParamUtils(object):
@@ -113,7 +139,7 @@ class ParamUtils(object):
             bool: True if `param_value` is constant or False otherwise.
         """
         # If it's not a string, return True
-        if not isinstance(param_value, string_types):
+        if not isinstance(param_value, Six.string_types):
             return True
         # Does it reference other parameters? If yes, it's not a constant.
         if ParamUtils.VAR_PATTERN.search(param_value):
@@ -302,12 +328,13 @@ class IOUtils(object):
             None: if `file_name` is None.
             JSON: JSON loaded from the file.
         """
-        if file_name is None:
-            return None
-        if check_extension:
-            IOUtils.check_file_extensions(file_name, ('.json', '.json.gz'))
-        with OpenFile(file_name, 'r') as file_obj:
-            return json.load(file_obj)
+        json_obj = None
+        if file_name is not None:
+            if check_extension:
+                IOUtils.check_file_extensions(file_name, ('.json', '.json.gz'))
+            with OpenFile(file_name, 'r') as file_obj:
+                json_obj = json.load(file_obj)
+        return json_obj
 
     @staticmethod
     def write_json(file_name, data, check_extension=False):
@@ -538,13 +565,13 @@ class DictUtils(object):
             return DictUtils.contains(dictionary, query)
         assert policy in ['relaxed', 'strict'], ""
 
-        for field, value in iteritems(query):
+        for field, value in Six.iteritems(query):
             if field not in dictionary:
                 if policy == 'relaxed':
                     continue
                 else:
                     return False
-            if isinstance(value, list) or not isinstance(value, string_types):
+            if isinstance(value, list) or not isinstance(value, Six.string_types):
                 values = value if isinstance(value, list) else [value]
                 if dictionary[field] not in values:
                     return False
@@ -688,7 +715,7 @@ class ConfigurationLoader(object):
                     param_info[name]['val'] = val['val']  # Existing parameter from user configuration, update its value
             else:
                 # Just parameter value
-                val_type = 'str' if isinstance(val, string_types) or isinstance(val, list) else type(val).__name__
+                val_type = 'str' if isinstance(val, Six.string_types) or isinstance(val, list) else type(val).__name__
                 if name not in param_info:
                     param_info[name] = {
                         'val': val,
@@ -756,13 +783,14 @@ class ConfigurationLoader(object):
         def _raise_types_mismatch_config_error(key, dest_val_type, src_val_type, valid_types):
             raise ConfigurationError(
                 "Configuration update error - expecting value types to be same and one of %s but"
-                " Dest(key=%s, val_type=%s) <- Source(key=%s, val_type=%s)" % (valid_types, key, dest_val_type.__name__, key, src_val_type.__name__)
+                " Dest(key=%s, val_type=%s) <- Source(key=%s, val_type=%s)" % (valid_types, key, dest_val_type.__name__,
+                                                                               key, src_val_type.__name__)
             )
         # Types and expected key names. Types must always match, else exception is thrown.
         if is_root:
             schema = {'types': (dict, list), 'dict': ['parameters', 'variables'], 'list': ['extensions']}
         else:
-            schema = {'types': (list, string_types, int, float, long)}
+            schema = {'types': (list, float) + Six.string_types + Six.integer_types}
         for key in source:
             # Firstly, check that type of value is expected.
             val_type = type(source[key]).__name__
@@ -784,7 +812,7 @@ class ConfigurationLoader(object):
                 both_dicts = isinstance(dest[key], dict) and isinstance(source[key], dict)
                 both_lists = isinstance(dest[key], list) and isinstance(source[key], list)
                 both_primitive = type(dest[key]) is type(source[key]) and \
-                                 isinstance(dest[key], (string_types, int, float, long))
+                                 isinstance(dest[key], Six.string_types + Six.integer_types + (float,))
 
                 if is_root:
                     if not both_dicts and not both_lists:

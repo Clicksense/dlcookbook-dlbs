@@ -39,7 +39,7 @@ import os
 import subprocess
 import string
 import copy
-from six import string_types
+from dlbs.utils import Six
 from collections import defaultdict
 
 
@@ -66,10 +66,10 @@ class Validator(object):
         self.gpu_docker_imgs = {}           # The mapping "framework -> set of docker images" for GPU experiments
         self.errors = []                    # All the errors found in this plan.
         self.messages = []                  # Any informational message that we want to print in a summary report.
-                                            # Like docker images IDs or framework versions.
+        #                                     Like docker images IDs or framework versions.
 
         self.framework_host_checks = {}     # Temporary storage for the mapping "framework -> env". Env is the env
-                                            # variables that we have already checked.
+        #                                     variables that we have already checked.
 
     def validate(self):
         """Performs all checks for provided plan."""
@@ -92,10 +92,11 @@ class Validator(object):
                     )
                 else:
                     log_file = experiment['exp.log_file']
-                    if log_file is None or not isinstance(log_file, string_types) or log_file.strip() == '':
+                    if log_file is None or not isinstance(log_file, Six.string_types) or log_file.strip() == '':
                         self.errors.append(
-                            "Log file parameter has invalid value ('%s'). It must not be None, must be of type string and must not be empty."
-                            "To disable log file check, define 'DLBS_LOG_FILE_CHECK=false' environmental variable." % log_file
+                            "Log file parameter has invalid value ('%s'). It must not be None, must be of "
+                            "type string and must not be empty. To disable log file check, define "
+                            "'DLBS_LOG_FILE_CHECK=false' environmental variable." % log_file
                         )
                     elif log_file in log_files:
                         self.log_files_collisions.add(log_file)
@@ -331,7 +332,8 @@ class Validator(object):
                 output if retcode != 0 else ['docker image exists']
             )
         except OSError as error:
-            self.errors.append("DockerImageExists (image=%s) check failed with message: '%s'" % (docker_img, str(error)))
+            self.errors.append("DockerImageExists (image=%s) "
+                               "check failed with message: '%s'" % (docker_img, str(error)))
 
     @staticmethod
     def run_process(cmd, env=None):

@@ -26,7 +26,7 @@ import sys   # noqa # pylint: disable=unused-import
 import re    # noqa # pylint: disable=unused-import
 #
 import json
-from six import string_types
+from dlbs.utils import Six
 from dlbs.exceptions import ConfigurationError
 from dlbs.exceptions import LogicError
 from dlbs.utils import DictUtils
@@ -148,7 +148,7 @@ class Processor(object):
             # Finalized means there are no nested variables
             # deps - dependencies, udeps - unsatisfied dependencies
             self.fwd_index[variable] = {'deps': set(), 'udeps': set(), 'finalized': True}
-        if isinstance(experiment[variable], string_types):
+        if isinstance(experiment[variable], Six.string_types):
             # Add inner most variables
             found_variables = 0
             for match in ParamUtils.VAR_PATTERN.finditer(experiment[variable]):
@@ -208,7 +208,7 @@ class Processor(object):
         computed = []
         partially_computed = []
         for var in computable_variables:
-            is_str = isinstance(experiment[var], string_types)
+            is_str = isinstance(experiment[var], Six.string_types)
             if not is_str:
                 computed.append(var)
                 continue
@@ -269,7 +269,7 @@ class Processor(object):
 
         """
         # Type of this parameter must be string:
-        if not isinstance(experiment[var], string_types):
+        if not isinstance(experiment[var], Six.string_types):
             return
         # Parameter info dictionary must present and contain info on this parameter
         if self.param_info is None or var not in self.param_info:

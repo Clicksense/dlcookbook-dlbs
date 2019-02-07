@@ -35,8 +35,8 @@ from __future__ import division
 from __future__ import print_function
 import argparse
 import json
-from six import string_types
 from collections import defaultdict
+from dlbs.utils import Six
 from dlbs.utils import DictUtils
 from dlbs.processor import Processor
 
@@ -71,7 +71,7 @@ def get_params(params):
     dictionary with null values.
     """
     parsed_params = json.loads(params)
-    if isinstance(parsed_params, string_types):
+    if isinstance(parsed_params, Six.string_types):
         parsed_params = load_json_file(parsed_params)
     if isinstance(parsed_params, list):
         parsed_params = dict.fromkeys(parsed_params, None)

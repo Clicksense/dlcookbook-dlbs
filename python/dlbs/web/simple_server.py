@@ -35,7 +35,12 @@ from __future__ import print_function
 import os
 import sys
 import json
-from six.moves.BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+from dlbs.utils import Six
+# Do not want to make `six` module a dependency for the project.
+if Six.PY3:
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+else:
+    from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 
 
 class DLBSHandler(BaseHTTPRequestHandler):

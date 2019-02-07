@@ -46,8 +46,7 @@ import os
 import json
 import argparse
 import sys
-from six import string_types
-from dlbs.utils import ConfigurationLoader
+from dlbs.utils import Six, ConfigurationLoader
 
 
 class Helper(object):
@@ -154,7 +153,7 @@ class Helper(object):
         )
         for key in self.param_info:
             pi = self.param_info[key]
-            if 'desc' in pi and isinstance(pi['desc'], string_types):
+            if 'desc' in pi and isinstance(pi['desc'], Six.string_types):
                 pi['desc'] = [pi['desc']]
         with open(os.path.join(os.path.dirname(__file__), 'frameworks.json')) as file_obj:
             self.frameworks_help = json.load(file_obj)

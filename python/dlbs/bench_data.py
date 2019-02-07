@@ -23,14 +23,11 @@ SummaryBuilder
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
 import copy
 import json
 import argparse
 import itertools
-from six import string_types, integer_types
-
-from dlbs.utils import IOUtils, OpenFile, DictUtils
+from dlbs.utils import Six, IOUtils, OpenFile, DictUtils
 from dlbs.processor import Processor
 
 
@@ -99,7 +96,7 @@ class BenchData(object):
             Callable object.
         """
         # If it's a string, assume it's a JSON parsable string and if not - assume it's a JSON file name.
-        if isinstance(query, string_types):
+        if isinstance(query, Six.string_types):
             try:
                 query = json.loads(query)
             except ValueError:
@@ -125,7 +122,7 @@ class BenchData(object):
         Returns:
             str or None: "ok" for successful benchmark, "failure" for not and None for other cases (such as no file).
         """
-        if isinstance(arg, string_types):
+        if isinstance(arg, Six.string_types):
             bench_data = BenchData.parse(arg)
         elif isinstance(arg, dict):
             bench_data = BenchData([arg], create_copy=False)
@@ -364,9 +361,9 @@ class BenchData(object):
         def to_string(val):
             if val is None:
                 return "-"
-            elif isinstance(val, string_types):
+            elif isinstance(val, Six.string_types):
                 return val
-            elif isinstance(val, integer_types):
+            elif isinstance(val, Six.integer_types):
                 return "{:d}".format(val)
             elif isinstance(val, float):
                 return "{:.2f}".format(val)
