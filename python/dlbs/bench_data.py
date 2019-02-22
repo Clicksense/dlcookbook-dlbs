@@ -27,6 +27,7 @@ import copy
 import json
 import argparse
 import itertools
+import os
 from dlbs.utils import Six, IOUtils, OpenFile, DictUtils
 from dlbs.processor import Processor
 
@@ -135,7 +136,7 @@ class BenchData(object):
         return None
 
     @staticmethod
-    def load(file_name):
+    def load(inputs, **kwargs):
         """Load benchmark data (parsed from log files) from a JSON file.
 
         A file name is a JSON file that contains object with 'data' field. This field
@@ -143,15 +144,21 @@ class BenchData(object):
         {"data":[{...}, {...}, {...}]}
 
         Args:
-            file_name (str): File name of a JSON (*.json) or a compressed JSON (.json.gz) file.
+            inputs (str): File name of a JSON (*.json) or a compressed JSON (.json.gz) file.
 
         Returns:
             Instance of this class.
         """
-        benchmarks = IOUtils.read_json(file_name, check_extension=True)
-        if 'data' not in benchmarks:
-            raise ValueError("No benchmark data found in '{}'".format(file_name))
-        return BenchData(benchmarks['data'], create_copy=False)
+        is_json_file = IOUtils.is_json_file(inputs)
+        if not is_json_file and isinstance(inputs, list) and len(inputs) == 1:
+            is_json_file = IOUtils.is_json_file(inputs[0])
+            inputs = inputs[0] if is_json_file else inputs
+        if is_json_file:
+            benchmarks = IOUtils.read_json(inputs, check_extension=True)
+            if 'data' not in benchmarks:
+                raise ValueError("No benchmark data found in '{}'".format(inputs))
+            return BenchData(benchmarks['data'], create_copy=False)
+        return BenchData.parse(inputs, **kwargs)
 
     @staticmethod
     def parse(inputs, recursive=False):
@@ -164,11 +171,18 @@ class BenchData(object):
         Returns:
             Instance of this class.
         """
-        file_names = IOUtils.gather_files(inputs, "*.log", recursive)
+        inputs = inputs if isinstance(inputs, list) else [inputs]
+        log_files = set()
+        for file_path in inputs:
+            if os.path.isdir(file_path):
+                log_files.update(IOUtils.gather_files(inputs, "*.log", recursive))
+            elif file_path.endswith('.log'):
+                log_files.add(file_path)
+        log_files = list(log_files)
         benchmarks = []
-        for file_name in file_names:
+        for log_file in log_files:
             parameters = {}
-            with OpenFile(file_name, 'r') as logfile:
+            with OpenFile(log_file, 'r') as logfile:
                 # The 'must_match' must be set to false. It says that not
                 # every line in a log file must match key-value pattern.
                 DictUtils.add(
@@ -225,13 +239,13 @@ class BenchData(object):
         """
         return BenchData(copy.deepcopy(self.__benchmarks))
 
-    def save(self, file_name):
+    def save(self, output_descriptor):
         """ Save contents of this instance into a (compressed) JSON file.
 
         Args:
-            file_name (str): A file name.
+            output_descriptor (str): A file name.
         """
-        IOUtils.write_json(file_name, {'data': self.__benchmarks})
+        IOUtils.write_json(output_descriptor, {'data': self.__benchmarks})
 
     def select(self, query):
         """ Select only those benchmarks that match `query`
@@ -553,24 +567,35 @@ def parse_arguments():
     parser.add_argument('--output', type=str, required=False, default=None,
                         help="File to write output to. If not specified, standard output is used. When log parsing "
                              "is performed, several output formats are supported: '*.json' and '*.json.gz'.")
+    parser.add_argument('--report', type=str, required=False, default=None,
+                        help="File to write output to. If not specified, standard output is used. When log parsing "
+                             "is performed, several output formats are supported: '*.json' and '*.json.gz'.")
     return vars(parser.parse_args())
 
 
-def parse(**kwargs):
-    data = BenchData.parse(kwargs['inputs'], recursive=not kwargs['no-recursive'])
-    if kwargs['select'] is not None:
-        data = data.select(kwargs['select'])
-    if kwargs['update'] is not None:
-        data = data.update(kwargs['select'], use_processor=False)
-    data.save(kwargs['output'])
+class BenchDataApp(object):
+    def __init__(self, args):
+        self.__args = args
 
+    def load(self):
+        data = BenchData.load(self.__args['inputs'], recursive=not self.__args['no_recursive'])
+        if self.__args['select'] is not None:
+            data = data.select(self.__args['select'])
+        if self.__args['update'] is not None:
+            data = data.update(self.__args['select'], use_processor=False)
+        return data
 
-def main():
-    args = parse_arguments()
-    print(args)
-    if args['action'] == 'parse':
-        parse(**args)
+    def run(self):
+        data = self.load()
+        action = self.__args['action']
+        if action == 'parse':
+            data.save(self.__args['output'])
+        elif action == 'summary':
+            IOUtils.write_json(self.__args['output'], data.summary(), check_extension=False)
+        elif action == 'report':
+            data.report(json.loads(self.__args['report']))
 
 
 if __name__ == "__main__":
-    main()
+    app = BenchDataApp(parse_arguments())
+    app.run()

@@ -317,6 +317,16 @@ class IOUtils(object):
             raise ValueError("Invalid file extension (%s). Must be one of %s" % extensions)
 
     @staticmethod
+    def is_json_file(input_descriptor):
+        """This is quite often used in the project
+        Args:
+            input_descriptor: Input descriptor.
+        Returns:
+            True if a file name ends with .json or .json.gz
+        """
+        return isinstance(input_descriptor, Six.string_types) and input_descriptor.endswith(('.json', '.json.gz'))
+
+    @staticmethod
     def read_json(file_name, check_extension=False):
         """Reads JSON object from file 'file_name'.
 
@@ -337,20 +347,24 @@ class IOUtils(object):
         return json_obj
 
     @staticmethod
-    def write_json(file_name, data, check_extension=False):
+    def write_json(output_descriptor, data, check_extension=False):
         """ Dumps `data` as a json object to a file with `file_name` name.
         Args:
-            file_name (str): Name of a file to serialise dictionary in.
+            output_descriptor : A specifier of where to write a json object.
             data: A data to dump into a JSON file.
             check_extension (bool): If true, ensure `file_name` has either `json` or `json.gz` extension.
         """
-        if file_name is None:
-            raise ValueError("File name is None")
-        if check_extension:
-            IOUtils.check_file_extensions(file_name, ('.json', '.json.gz'))
-        IOUtils.mkdirf(file_name)
-        with OpenFile(file_name, 'w') as file_obj:
-            json.dump(data, file_obj, indent=4)
+        output_descriptor = output_descriptor if output_descriptor is not None else sys.stdout
+        if output_descriptor in [sys.stdout, sys.stderr]:
+            json.dump(data, output_descriptor, indent=4)
+        elif isinstance(output_descriptor, Six.string_types):
+            if check_extension:
+                IOUtils.check_file_extensions(output_descriptor, ('.json', '.json.gz'))
+            IOUtils.mkdirf(output_descriptor)
+            with OpenFile(output_descriptor, 'w') as file_obj:
+                json.dump(data, file_obj, indent=4)
+        else:
+            raise ValueError("Invalid write descriptor ({})".format(type(output_descriptor)))
 
 
 class DictUtils(object):
