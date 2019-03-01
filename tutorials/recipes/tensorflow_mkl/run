@@ -1,0 +1,11 @@
+#!/bin/bash
+
+export BENCH_ROOT=$( cd $( dirname "${BASH_SOURCE[0]}" ) && pwd )
+source ${BENCH_ROOT}/../../../scripts/environment.sh
+
+# Run one of these configurations. The `_test` is a simple config to make sure everything works.
+config=./config_test.json
+#config=./config.json
+
+python ${experimenter} run --config=${config}
+exit 0

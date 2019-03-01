@@ -161,12 +161,13 @@ class BenchData(object):
         return BenchData.parse(inputs, **kwargs)
 
     @staticmethod
-    def parse(inputs, recursive=False):
+    def parse(inputs, recursive=False, ignore_errors=False):
         """Parse benchmark log files (*.log).
 
         Args:
             inputs: Path specifiers of where to search for log files.
             recursive (bool): If true, parse directories found in `inputs` recursively.
+            ignore_errors (bool): If true, ignore errors associated with parsing parameter values.
 
         Returns:
             Instance of this class.
@@ -189,7 +190,8 @@ class BenchData(object):
                     parameters,
                     logfile,
                     pattern='[ \t]*__(.+?(?=__[ \t]*[=]))__[ \t]*=(.+)',
-                    must_match=False
+                    must_match=False,
+                    ignore_errors=ignore_errors
                 )
             benchmarks.append(parameters)
         return BenchData(benchmarks, create_copy=False)
@@ -361,14 +363,24 @@ class BenchData(object):
         return summary_dict
 
     def report(self, inputs=None, output=None, output_cols=None, report_speedup=False, report_efficiency=False):
+        """
+        Args:
+            inputs (list): List of "input" columns that identify a one report record key. Each report record must
+                have unique key.
+            output (str): An output column name (like exp.replica_batch).
+            output_cols (list): If given, titles for output columns. Number of output columns is equal to number of distinct
+                values of the output parameter.
+            report_speedup (bool): If true, output speedup table.
+            report_efficiency (bool): If true, output efficiency table.
+        """
         reporter = BenchData.Reporter(self)
         reporter.report(inputs, output, output_cols, report_speedup, report_efficiency)
 
     class Reporter(object):
         TITLES = {
-            "exp.model_title": "Model", "exp.replica_batch": "Replica Batch", "exp.effective_batch": "Effective Batch",
-            "exp.num_gpus": "Num GPUs", "exp.gpus": "GPUs", "exp.dtype": "Precision",
-            "exp.docker_image": "Docker Image"
+            'exp.model_title': 'Model', 'exp.replica_batch': 'Replica Batch', 'exp.effective_batch': 'Effective Batch',
+            'exp.num_gpus': 'Num GPUs', 'exp.gpus': 'GPUs', 'exp.dtype': 'Precision',
+            'exp.docker_image': 'Docker Image', 'exp.device_type': 'DeviceType'
         }
 
         @staticmethod
@@ -480,14 +492,17 @@ class BenchData(object):
                 format_str = "  %-" + str(input_col['width']) + "s"
                 header = header + format_str % BenchData.Reporter.to_string(input_col['title'])
             header += "    "
+            output_cols_title = " " * len(header) + DictUtils.get(BenchData.Reporter.TITLES,
+                                                                  self.output_param, self.output_param)
             for output_col in self.output_cols:
                 format_str = "%+" + str(output_col['width']) + "s  "
                 header = header + format_str % BenchData.Reporter.to_string(output_col['title'])
-            return header
+            return [output_cols_title, header]
 
         def print_table(self, title, header, inputs, outputs):
             print(title)
-            print(header)
+            for header_line in header:
+                print(header_line)
             for input, output in zip(inputs, outputs):
                 row = ""
                 for input_col in self.input_cols:
@@ -545,6 +560,12 @@ class BenchData(object):
                                  "relative to first output column ({} = {}))".format(self.output_param,
                                                                                      self.output_cols[0]['value']),
                                  header, cols, efficiency)
+            print("This report is configured with the following parameters:")
+            print(" inputs = %s" % str(inputs))
+            print(" output = %s" % output)
+            print(" output_cols = %s" % str(output_cols))
+            print(" report_speedup = %s" % str(report_speedup))
+            print(" report_efficiency = %s" % str(report_efficiency))
 
 
 def parse_arguments():
@@ -556,10 +577,16 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', type=str, default='parse', choices=['parse', 'summary', 'report'],
                         help="Action to perform. ")
+
     parser.add_argument('inputs', type=str, nargs='*',
                         help="Input file(s) and/or folders. ")
     parser.add_argument('--no-recursive', '--no_recursive', required=False, default=False,
                         action='store_true', help='When parsing log files, do not parse folders recursively.')
+    parser.add_argument(
+        '--ignore_errors', required=False, default=False, action='store_true',
+        help="If set, ignore errors related to parsing benchmark parameters."
+    )
+
     parser.add_argument('--select', type=str, required=False, default=None,
                         help="A select query to filter benchmarks.")
     parser.add_argument('--update', type=str, required=False, default=None,
@@ -567,18 +594,34 @@ def parse_arguments():
     parser.add_argument('--output', type=str, required=False, default=None,
                         help="File to write output to. If not specified, standard output is used. When log parsing "
                              "is performed, several output formats are supported: '*.json' and '*.json.gz'.")
+
     parser.add_argument('--report', type=str, required=False, default=None,
-                        help="File to write output to. If not specified, standard output is used. When log parsing "
-                             "is performed, several output formats are supported: '*.json' and '*.json.gz'.")
+                        help="A type of report to build - one of (regular|weak|strong).")
     return vars(parser.parse_args())
 
 
 class BenchDataApp(object):
+    REPORT_PARAMS = {
+        'regular': {
+            'inputs': ['exp.model_title', 'exp.device_type'], 'output': 'exp.replica_batch'
+        },
+        'weak': {
+            'inputs': ['exp.model_title', 'exp.replica_batch'], 'output': 'exp.gpus',
+            'report_speedup': True, 'report_efficiency': True
+        },
+        'strong': {
+            'inputs': ['exp.model_title', 'exp.effective_batch'], 'output': 'exp.gpus',
+            'report_speedup': True, 'report_efficiency': True
+        }
+    }
+
     def __init__(self, args):
         self.__args = args
 
     def load(self):
-        data = BenchData.load(self.__args['inputs'], recursive=not self.__args['no_recursive'])
+        data = BenchData.load(self.__args['inputs'],
+                              recursive=not self.__args['no_recursive'],
+                              ignore_errors=self.__args['ignore_errors'])
         if self.__args['select'] is not None:
             data = data.select(self.__args['select'])
         if self.__args['update'] is not None:
@@ -593,7 +636,8 @@ class BenchDataApp(object):
         elif action == 'summary':
             IOUtils.write_json(self.__args['output'], data.summary(), check_extension=False)
         elif action == 'report':
-            data.report(json.loads(self.__args['report']))
+            report_params = BenchDataApp.REPORT_PARAMS[self.__args['report']]
+            data.report(**report_params)
 
 
 if __name__ == "__main__":

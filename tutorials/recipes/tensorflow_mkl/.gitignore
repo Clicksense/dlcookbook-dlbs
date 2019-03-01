@@ -1,0 +1,9 @@
+# Ignore everything
+*
+
+# But these files:
+!.gitignore
+!config.json
+!config_test.json
+!parse
+!run
