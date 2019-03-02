@@ -3,7 +3,7 @@
 
 # But these files:
 !.gitignore
-!config.json
-!config_test.json
+!inference.json
+!inference_test.json
 !parse
 !run

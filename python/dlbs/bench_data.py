@@ -596,7 +596,9 @@ def parse_arguments():
                              "is performed, several output formats are supported: '*.json' and '*.json.gz'.")
 
     parser.add_argument('--report', type=str, required=False, default=None,
-                        help="A type of report to build - one of (regular|weak|strong).")
+                        help="A type of report to build - one of (regular|weak|strong) or a JSON parsable string. "
+                             "It must be a dictionary with such keys as inputs, output and optionally report_speedup "
+                             "and report_efficiency.")
     return vars(parser.parse_args())
 
 
@@ -606,11 +608,11 @@ class BenchDataApp(object):
             'inputs': ['exp.model_title', 'exp.device_type'], 'output': 'exp.replica_batch'
         },
         'weak': {
-            'inputs': ['exp.model_title', 'exp.replica_batch'], 'output': 'exp.gpus',
+            'inputs': ['exp.model_title', 'exp.replica_batch'], 'output': 'exp.num_gpus',
             'report_speedup': True, 'report_efficiency': True
         },
         'strong': {
-            'inputs': ['exp.model_title', 'exp.effective_batch'], 'output': 'exp.gpus',
+            'inputs': ['exp.model_title', 'exp.effective_batch'], 'output': 'exp.num_gpus',
             'report_speedup': True, 'report_efficiency': True
         }
     }
@@ -636,7 +638,14 @@ class BenchDataApp(object):
         elif action == 'summary':
             IOUtils.write_json(self.__args['output'], data.summary(), check_extension=False)
         elif action == 'report':
-            report_params = BenchDataApp.REPORT_PARAMS[self.__args['report']]
+            if self.__args['report'] in BenchDataApp.REPORT_PARAMS:
+                report_params = BenchDataApp.REPORT_PARAMS[self.__args['report']]
+            else:
+                try:
+                    report_params = json.loads(self.__args['report'])
+                except ValueError:
+                    print("Invalid format of a report specification: {}".format(self.__args['report']))
+                    exit(1)
             data.report(**report_params)
 
 
