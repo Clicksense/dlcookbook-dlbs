@@ -317,6 +317,17 @@ class IOUtils(object):
             raise ValueError("Invalid file extension (%s). Must be one of %s" % extensions)
 
     @staticmethod
+    def is_compressed_tarball(input_descriptor):
+        """Returns true if this descriptor is a compressed tarball.
+        It is an assumption that such files are compressed directories with benchmark log files.
+        Args:
+            input_descriptor: Input descriptor.
+        Returns:
+            True if a file name ends with .tgz or .tar.gz
+        """
+        return isinstance(input_descriptor, Six.string_types) and input_descriptor.endswith(('.tgz', '.tar.gz'))
+
+    @staticmethod
     def is_json_file(input_descriptor):
         """This is quite often used in the project
         Args:
@@ -325,6 +336,16 @@ class IOUtils(object):
             True if a file name ends with .json or .json.gz
         """
         return isinstance(input_descriptor, Six.string_types) and input_descriptor.endswith(('.json', '.json.gz'))
+
+    @staticmethod
+    def is_csv_file(input_descriptor):
+        """Returns true if this is a *.csv file.
+        Args:
+            input_descriptor: Input descriptor.
+        Returns:
+            True if a file name ends with .csv or .csv.gz
+        """
+        return isinstance(input_descriptor, Six.string_types) and input_descriptor.endswith(('.csv', '.csv.gz'))
 
     @staticmethod
     def read_json(file_name, check_extension=False):

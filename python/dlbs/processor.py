@@ -133,7 +133,10 @@ class Processor(object):
                 # exit(0)
 
             # We need to remove all internal temp variables
-            for name in experiment.keys():
+            # We need to remove all internal temp variables.
+            # In P2, keys() makes a copy. In P3 it returns an iterator -> this
+            # 'dictionary changed size during iteration' error. So, making copy
+            for name in list(experiment.keys()):
                 if name.startswith('__dlbs_'):
                     experiment.pop(name)
 

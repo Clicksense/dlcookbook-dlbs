@@ -25,9 +25,12 @@ from __future__ import division
 from __future__ import print_function
 import copy
 import json
+import csv
 import argparse
 import itertools
 import os
+import pickle
+import tarfile
 from dlbs.utils import Six, IOUtils, OpenFile, DictUtils
 from dlbs.processor import Processor
 
@@ -156,8 +159,42 @@ class BenchData(object):
         if is_json_file:
             benchmarks = IOUtils.read_json(inputs, check_extension=True)
             if 'data' not in benchmarks:
-                raise ValueError("No benchmark data found in '{}'".format(inputs))
+                benchmarks = {'data': []}
+                print("[WARNING]: No benchmark data found in '{}'".format(inputs))
             return BenchData(benchmarks['data'], create_copy=False)
+        #
+        is_csv_file = IOUtils.is_csv_file(inputs)
+        if not is_csv_file and isinstance(inputs, list) and len(inputs) == 1:
+            is_csv_file = IOUtils.is_csv_file(inputs[0])
+            inputs = inputs[0] if is_csv_file else inputs
+        if is_csv_file:
+            with OpenFile(inputs, 'r') as fobj:
+                reader = csv.DictReader(fobj)
+                benchmarks = list(reader)
+            return BenchData(benchmarks, create_copy=False)
+        #
+        is_compressed_tarball = IOUtils.is_compressed_tarball(inputs)
+        if not is_compressed_tarball and isinstance(inputs, list) and len(inputs) == 1:
+            is_compressed_tarball = IOUtils.is_json_file(inputs[0])
+            inputs = inputs[0] if is_compressed_tarball else inputs
+        if is_compressed_tarball:
+            benchmarks = []
+            with tarfile.open(inputs, "r:gz") as archive:
+                for member in archive.getmembers():
+                    if member.isfile() and member.name.endswith('.log'):
+                        log_file = archive.extractfile(member)
+                        if log_file is not None:
+                            parameters = {}
+                            DictUtils.add(
+                                parameters,
+                                log_file,
+                                pattern='[ \t]*__(.+?(?=__[ \t]*[=]))__[ \t]*=(.+)',
+                                must_match=False,
+                                ignore_errors=True
+                            )
+                            benchmarks.append(parameters)
+            return BenchData(benchmarks, create_copy=False)
+        #
         return BenchData.parse(inputs, **kwargs)
 
     @staticmethod
@@ -196,6 +233,14 @@ class BenchData(object):
             benchmarks.append(parameters)
         return BenchData(benchmarks, create_copy=False)
 
+    @staticmethod
+    def merge_benchmarks(dest_dict, source_dict):
+        for bench_key in source_dict:
+            if bench_key not in dest_dict:
+                dest_dict[bench_key] = source_dict[bench_key]
+            else:
+                dest_dict[bench_key].update(source_dict[bench_key])
+
     def __init__(self, benchmarks=None, create_copy=False):
         if benchmarks is None:
             self.__benchmarks = []
@@ -220,6 +265,25 @@ class BenchData(object):
             dict: Parameters for i-th benchmark.
         """
         return self.__benchmarks[i]
+
+    def as_dict(self, key_len=-1):
+        """ Return dictionary mapping benchmark id to its parameters
+        Args:
+            key_len (int): Length of a benchmark key. By default(-1) entire value of a `exp.id` (which is GUID)
+                will be used.
+        Returns:
+            dict: Mapping from benchmark id to their parameters
+        """
+        benchmarks = {}
+        for benchmark in self.__benchmarks:
+            if 'exp.id' not in benchmark:
+                continue
+            key = benchmark['exp.id']
+            if key_len > 0:
+                bench_key_len = min(key_len, len(benchmark['exp.id']))
+                key = benchmark['exp.id'][0:bench_key_len]
+            benchmarks[key] = benchmark
+        return benchmarks
 
     def benchmarks(self):
         """Return list of dictionaries with benchmark parameters.
@@ -362,7 +426,8 @@ class BenchData(object):
             summary_dict[param] = list(summary_dict[param])
         return summary_dict
 
-    def report(self, inputs=None, output=None, output_cols=None, report_speedup=False, report_efficiency=False):
+    def report(self, inputs=None, output=None, output_cols=None,
+               report_speedup=False, report_efficiency=False, **kwargs):
         """
         Args:
             inputs (list): List of "input" columns that identify a one report record key. Each report record must
@@ -374,7 +439,7 @@ class BenchData(object):
             report_efficiency (bool): If true, output efficiency table.
         """
         reporter = BenchData.Reporter(self)
-        reporter.report(inputs, output, output_cols, report_speedup, report_efficiency)
+        reporter.report(inputs, output, output_cols, report_speedup, report_efficiency, **kwargs)
 
     class Reporter(object):
         TITLES = {
@@ -509,10 +574,15 @@ class BenchData(object):
                     format_str = "  %-" + str(input_col['width']) + "s"
                     row = row + format_str % BenchData.Reporter.to_string(input[input_col['index']])
                 row += "    "
+                num_missing_outputs = 0
                 for output_col in self.output_cols:
                     format_str = "%+" + str(output_col['width']) + "s  "
-                    row = row + format_str % BenchData.Reporter.to_string(output[output_col['index']])
-                print(row)
+                    val = BenchData.Reporter.to_string(output[output_col['index']])
+                    if val == '-':
+                        num_missing_outputs += 1
+                    row = row + format_str % val
+                if num_missing_outputs != len(self.output_cols):
+                    print(row)
             print("\n\n")
 
         def __init__(self, bench_data):
@@ -522,7 +592,10 @@ class BenchData(object):
             self.output_cols = None
             self.cache = None
 
-        def report(self, inputs=None, output=None, output_cols=None, report_speedup=False, report_efficiency=False):
+        def report(self, inputs=None, output=None, output_cols=None,
+                   report_speedup=False, report_efficiency=False, **kwargs):
+            DictUtils.ensure_exists(kwargs, 'report_batch_times', True)
+            DictUtils.ensure_exists(kwargs, 'report_input_specs', True)
             # Build cache that will map benchmarks keys to benchmark objects.
             self.build_cache(inputs, output, output_cols)
             # Iterate over column values and build table with batch times and throughput
@@ -546,7 +619,8 @@ class BenchData(object):
             self.compute_column_widths(times, throughputs)
             #
             header = self.get_header()
-            self.print_table("Batch time (milliseconds)", header, cols, times)
+            if kwargs['report_batch_times']:
+                self.print_table("Batch time (milliseconds)", header, cols, times)
             self.print_table("Throughput (instances per second e.g. images/sec)", header, cols, throughputs)
             if report_speedup:
                 speedups = self.compute_speedups(throughputs)
@@ -560,12 +634,13 @@ class BenchData(object):
                                  "relative to first output column ({} = {}))".format(self.output_param,
                                                                                      self.output_cols[0]['value']),
                                  header, cols, efficiency)
-            print("This report is configured with the following parameters:")
-            print(" inputs = %s" % str(inputs))
-            print(" output = %s" % output)
-            print(" output_cols = %s" % str(output_cols))
-            print(" report_speedup = %s" % str(report_speedup))
-            print(" report_efficiency = %s" % str(report_efficiency))
+            if kwargs['report_input_specs']:
+                print("This report is configured with the following parameters:")
+                print(" inputs = %s" % str(inputs))
+                print(" output = %s" % output)
+                print(" output_cols = %s" % str(output_cols))
+                print(" report_speedup = %s" % str(report_speedup))
+                print(" report_efficiency = %s" % str(report_efficiency))
 
 
 def parse_arguments():
@@ -575,7 +650,7 @@ def parse_arguments():
         dict: Dictionary with command line arguments.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', type=str, default='parse', choices=['parse', 'summary', 'report'],
+    parser.add_argument('action', type=str, default='parse', choices=['parse', 'summary', 'report', 'benchdb'],
                         help="Action to perform. ")
 
     parser.add_argument('inputs', type=str, nargs='*',
@@ -619,6 +694,13 @@ class BenchDataApp(object):
 
     def __init__(self, args):
         self.__args = args
+        self.__data = None
+        self.__functions = {
+            'parse': self.action_parse,
+            'summary': self.action_summary,
+            'report': self.action_report,
+            'benchdb': self.action_benchdb
+        }
 
     def load(self):
         data = BenchData.load(self.__args['inputs'],
@@ -630,23 +712,54 @@ class BenchDataApp(object):
             data = data.update(self.__args['select'], use_processor=False)
         return data
 
+    def action_parse(self):
+        self.__data.save(self.__args['output'])
+
+    def action_summary(self):
+        IOUtils.write_json(self.__args['output'], self.__data.summary(), check_extension=False)
+
+    def action_report(self):
+        if self.__args['report'] in BenchDataApp.REPORT_PARAMS:
+            report_params = BenchDataApp.REPORT_PARAMS[self.__args['report']]
+        else:
+            try:
+                report_params = json.loads(self.__args['report'])
+            except ValueError:
+                print("Invalid format of a report specification: {}".format(self.__args['report']))
+                exit(1)
+        self.__data.report(**report_params)
+
+    def action_benchdb(self):
+        #
+        print("Searching for benchmark archives ...")
+        file_names = []
+        for file_type in ('*.tgz', '*.tar.gz', '*.json.gz'):
+            file_names.extend(IOUtils.find_files(self.__args['inputs'][0], file_type, recursively=True))
+        print("    found {} benchmark files.".format(len(file_names)))
+        #
+        bench_data = {}
+        print("Parsing benchmark archives ...")
+        for file_name in file_names:
+            BenchData.merge_benchmarks(
+                bench_data,
+                BenchData.load(file_name).as_dict(key_len=5)
+            )
+            print("    done [{}]".format(file_name))
+
+        print("    found {} benchmarks.".format(len(bench_data)))
+        #
+        print("Serializing benchmarks ...")
+        with open('/dev/shm/benchmark_db.pickle', 'wb') as handle:
+            pickle.dump(bench_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        #
+        print("    database generation completed.")
+
     def run(self):
-        data = self.load()
         action = self.__args['action']
-        if action == 'parse':
-            data.save(self.__args['output'])
-        elif action == 'summary':
-            IOUtils.write_json(self.__args['output'], data.summary(), check_extension=False)
-        elif action == 'report':
-            if self.__args['report'] in BenchDataApp.REPORT_PARAMS:
-                report_params = BenchDataApp.REPORT_PARAMS[self.__args['report']]
-            else:
-                try:
-                    report_params = json.loads(self.__args['report'])
-                except ValueError:
-                    print("Invalid format of a report specification: {}".format(self.__args['report']))
-                    exit(1)
-            data.report(**report_params)
+        if action != 'benchdb':
+            self.__data = self.load()
+        if action in self.__functions:
+            self.__functions[action]()
 
 
 if __name__ == "__main__":
